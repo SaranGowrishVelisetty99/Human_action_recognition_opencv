@@ -89,12 +89,14 @@ def process_video(input_path, output_path):
         return
 
     fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps == 0 or fpr is None:
+        fps = 15
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
     if not out.isOpened():
-        print(f"Error: Could not open {output_path} for writing.")
+        print(f"Error: Could not open {outpsut_path} for writing.")
         cap.release()
         return
 
