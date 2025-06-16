@@ -45,6 +45,7 @@ model = ActionClassificationLSTM.load_from_checkpoint(
 )
 model.eval().to(cfg.MODEL.DEVICE)
 
+# Updated keypoint indices - removed nose (0), kept eyes for head reference
 KEYPOINT_INDICES = [
     1,  # Left Eye
     2,  # Right Eye
@@ -66,17 +67,35 @@ def draw_line(image, p1, p2, color):
 def draw_keypoints(person, img):
     keypoints = person[:, :2]
     confidence = person[:, 2]
+    
+    # Updated skeleton connections - removed nose, added more torso connections
     skeleton = [
-        (5, 7), (7, 9), (6, 8), (8, 10),
-        (5, 6), (5, 11), (6, 12),
-        (11, 13), (13, 15), (12, 14), (14, 16),
-        (11, 12)
+        # Arms
+        (5, 7), (7, 9),   # Left arm: shoulder -> elbow -> wrist
+        (6, 8), (8, 10),  # Right arm: shoulder -> elbow -> wrist
+        
+        # Torso connections
+        (5, 6),   # Shoulder to shoulder (across chest)
+        (5, 11),  # Left shoulder to left hip
+        (6, 12),  # Right shoulder to right hip
+        (11, 12), # Hip to hip (across pelvis)
+        
+        # Additional torso diagonal for more stability
+        (5, 12),  # Left shoulder to right hip
+        (6, 11),  # Right shoulder to left hip
+        
+        # Legs
+        (11, 13), (13, 15), # Left leg: hip -> knee -> ankle
+        (12, 14), (14, 16), # Right leg: hip -> knee -> ankle
     ]
+    
     for p1, p2 in skeleton:
         if confidence[p1] > 0.5 and confidence[p2] > 0.5:
             draw_line(img, keypoints[p1], keypoints[p2], GREEN_COLOR)
+    
+    # Draw keypoints (circles) - skip nose keypoint
     for i, (x, y) in enumerate(keypoints):
-        if confidence[i] > 0.5:
+        if i != 0 and confidence[i] > 0.5:  # Skip index 0 (nose)
             cv2.circle(img, (int(x), int(y)), 4, WHITE_COLOR, -1)
 
 def draw_action_label(frame, label):
@@ -89,61 +108,65 @@ def process_video(input_path, output_path):
         return
 
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0 or fpr is None:
-        fps = 15
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+    if width == 0 or height == 0:
+        print("Error: Invalid video dimensions.")
+        cap.release()
+        return
+
     out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
     if not out.isOpened():
-        print(f"Error: Could not open {outpsut_path} for writing.")
+        print(f"Error: Could not open {output_path} for writing.")
         cap.release()
         return
 
     sequence = deque(maxlen=SEQUENCE_LENGTH)
+    last_action_label = "Detecting..."
     frame_idx = 0
 
-    while cap.isOpened():
+    while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        if FRAME_SKIP > 0 and (frame_idx % (FRAME_SKIP + 1)) != 0:
-            out.write(frame)
-            frame_idx += 1
-            continue
-
+        # Pose detection (on resized frame for speed)
         small_frame = cv2.resize(frame, (0, 0), fx=RESIZE_FACTOR, fy=RESIZE_FACTOR)
         outputs = pose_detector(small_frame)
 
+        # Draw keypoints if detected
         if outputs["instances"].has("pred_keypoints") and len(outputs["instances"].pred_keypoints) > 0:
             keypoints = outputs["instances"].pred_keypoints[0].cpu().numpy()
-            keypoints[:, :2] /= RESIZE_FACTOR
+            keypoints[:, :2] /= RESIZE_FACTOR  # scale back to original size
             draw_keypoints(keypoints, frame)
 
-            keypoints_for_lstm = keypoints[KEYPOINT_INDICES].reshape(-1)
-            sequence.append(keypoints_for_lstm)
+            # Prepare keypoints for LSTM
+            person_keypoints = keypoints[KEYPOINT_INDICES].reshape(-1)
+            sequence.append(person_keypoints)
         else:
-            sequence.append(np.zeros(len(KEYPOINT_INDICES) * 3))
+            person_keypoints = None
 
+        # Predict action on every frame once sequence is ready
         if len(sequence) == SEQUENCE_LENGTH:
             input_np = np.array(sequence, dtype=np.float32)
             input_tensor = torch.from_numpy(input_np).unsqueeze(0).to(cfg.MODEL.DEVICE)
             with torch.no_grad():
                 logits = model(input_tensor)
                 pred_class = logits.argmax(dim=1).item()
-                draw_action_label(frame, CLASS_LABELS[pred_class])
+                action_label = CLASS_LABELS[pred_class]
+            draw_action_label(frame, action_label)
+        else:
+            draw_action_label(frame, "Detecting...")
 
         out.write(frame)
-        if USE_IMSHOW:
-            cv2.imshow("Action Recognition", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-
         frame_idx += 1
 
-    cap.release()
     out.release()
-    if USE_IMSHOW:
-        cv2.destroyAllWindows()
+    cap.release()
     print(f"Processing complete. Output saved as {output_path}")
+
+    # Double-check file was written and is not empty
+    import os
+    if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+        print("Error: Output video was not written correctly or is empty.")
