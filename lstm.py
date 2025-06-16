@@ -32,11 +32,12 @@ class ActionDataset(Dataset):
 
 # Model Definition
 class ActionClassificationLSTM(pl.LightningModule):
-    def __init__(self, input_features, hidden_dim, num_classes=6, learning_rate=0.001):
+    def __init__(self, input_features, hidden_dim=256, num_layers=2, num_classes=6, learning_rate=0.001):
         super().__init__()
         self.save_hyperparameters()
-        self.lstm = nn.LSTM(input_features, hidden_dim, batch_first=True)
+        self.lstm = nn.LSTM(input_features, hidden_dim, num_layers=num_layers, batch_first=True)
         self.linear = nn.Linear(hidden_dim, num_classes)
+        self.learning_rate = learning_rate
         self.train_losses = []
         self.train_accs = []
 
@@ -172,6 +173,9 @@ if __name__ == "__main__":
     input_features = num_features_per_frame
     print(f"Final X_train shape: {X_train.shape}")
     print(f"Final y_train shape: {y_train.shape}")
+
+    # Before training, normalize X_train and X_val
+    X_train = (X_train - X_train.mean(axis=0)) / (X_train.std(axis=0) + 1e-8)
 
     # Create datasets and dataloaders
     train_dataset = ActionDataset(X_train, y_train)
