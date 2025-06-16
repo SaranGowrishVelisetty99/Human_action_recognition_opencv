@@ -5,7 +5,7 @@ import time
 
 app = Flask(__name__)
 UPLOAD_FOLDER = 'uploads'
-OUTPUT_FOLDER = 'static/output'
+OUTPUT_FOLDER = 'static\output'
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -31,7 +31,7 @@ def upload_video():
 
     return render_template(
         'index.html',
-        output_video='output/output.mp4',
+        output_video=True,
         cache_buster=cache_buster
     )
 
